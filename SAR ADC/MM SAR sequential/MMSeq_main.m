@@ -24,7 +24,7 @@ ADC_input_OS =  database_load('upsampled_EEG', epoch)';
 
 
 %% System settings
-number_of_bits = 10;
+number_of_bits = 7;
 input_BW = 128; %This should be the Nyquist frequency, and input should be oversampled wrt this
 signal_peak_amplitude = .001;
 signal_bias = 0;

@@ -2,10 +2,9 @@ function CorrectedSRBM = rescaleSRBM(SRBM, K)
 
 SRBM = SRBM~=0;
 
-nb_ones_column = sum(SRBM,2);
-CorrectedSRBM = SRBM;
+CorrectedSRBM = double(SRBM);
 for j=1:size(SRBM,1)
-    nb_ones = nb_ones_column(j);
+    nb_ones = sum(SRBM(j,:));
     for i=1:size(SRBM,2)
         if (CorrectedSRBM(j,i) == 1)
             CorrectedSRBM(j,i) = (K/(K+1))^(nb_ones-1);
@@ -13,6 +12,8 @@ for j=1:size(SRBM,1)
         end
     end
 end
+
+
 
 end
 
