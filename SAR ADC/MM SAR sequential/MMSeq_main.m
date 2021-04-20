@@ -1,6 +1,6 @@
 clear;
 verbose = false;
-tic
+% tic
 
 %%  Constants 
 k = 1.38064852e-23;
@@ -24,13 +24,12 @@ ADC_input_OS =  database_load('upsampled_EEG', epoch)';
 
 
 %% System settings
-number_of_bits = 7;
+number_of_bits = 8;
 input_BW = 128; %This should be the Nyquist frequency, and input should be oversampled wrt this
 signal_peak_amplitude = .001;
 signal_bias = 0;
-
 nb_MAC = 384;
-cap_ratio = 35;
+cap_ratio = 15;
 nb_channels = 150;
 nb_activations = 2;
 
@@ -96,10 +95,10 @@ MM_sampling_noise = noise_on*((k*T * C1/(C1+C2)^2) + (k*T*(C1*C2/(C1+C2))/C2^2))
 
 %% Sample & hold (with gain)
 switch_noise_on = noise_on;
-Cs = minimum_cap/MM_incomplete_transfer_coeff;
-Cf = minimum_cap;
-sampling_gain = Cs/Cf;
-switching_noise = k*T/Cf;
+Cs_unit_cap = 20/MM_incomplete_transfer_coeff;
+Cf_unit_cap = 20;
+sampling_gain = Cs_unit_cap/Cf_unit_cap;
+switching_noise = k*T/(Cf_unit_cap*minimum_cap);
 
 
 %% Comparator offset/hysteresis & noise
@@ -128,7 +127,7 @@ gm_min_2 = Id_min_2*gmoverid;
 LNA_input_referred_noise_2 = LNA_NEF/(sqrt(2*Id_min_2/(pi*V_thermal*4*k*T*LNA_bandwidth)));
 
 % Determine minimum current if noise-constrained
-LNA_input_referred_noise_3 = noise_quantization/2;
+LNA_input_referred_noise_3 = noise_quantization*10;
 Id_min_3 = (LNA_NEF/LNA_input_referred_noise_3)^2*pi*4*k*T*LNA_bandwidth*V_thermal;
 
 % Determine which of the three cases limits LNA performance
@@ -179,9 +178,9 @@ ADC_input_reshaped_OS = repmat(ADC_input_OS, 1, nb_channels);
 sim_number = 1; %Change in future during multiple iterations of one setting for noise estimations, such that noise seeds are different
 sim_noise_seed = sim_number;
 
-tic
+
 sim_out = sim('MMSAR_Sequential', (nb_channels+1)*clk_period*nb_MAC);
-toc
+
 cs_out = zeros(nb_channels,1);
 for i = 1:nb_channels
     cs_out(sensing_order(i)) = sim_out.yout.signals(1).values(i+3);
@@ -216,6 +215,7 @@ expected_recovery = BSBL_BO(A, expected_coeff, 1:15:nb_MAC, 0, 'prune_gamma',-1,
 expected_recovered_signal = (idct(expected_recovery.x))';
 
 [rms_out, mse_out] = calculateRMS(ADC_input*total_gain, recovered_signal);
+mse_out
 [rms_out_expected, mse_out_expected] = calculateRMS(expected_recovered_signal, recovered_signal);
 
 % SSIM calculations
@@ -265,12 +265,13 @@ P_dac_percentage = round(100*P_dac/P_tot,2);
 P_SAR_percentage = round(100*P_tot_SAR/P_tot,2);
 P_transmission_full_percentage = round(100*P_transmission_full_signal/P_tot,2);
 
-
 %% Calculate total capacitance/area required - trade-off multi-ADC VS OC-ADC
 %Total C & overclocking ratio
 total_C_unit = zeros(5,1);
 area_C = zeros(5,1);
 OCR = zeros(5,1);
+
+
 
 for j = 1:5
 
@@ -280,14 +281,13 @@ for j = 1:5
 
     C_SAR = 2^number_of_bits * j;
 
-    total_C_unit(j) = C_MAC + C_SH + C_SAR;
+    total_C_unit(j) = C_MAC + C_SH + C_SAR + Cs_unit_cap + Cf_unit_cap;
    
     OCR(j) = nb_activations*(number_of_bits+3)/j;
 end
 
 total_C = total_C_unit*minimum_cap;
 area_C = total_C*area_per_C;
-
 
 %% Figure plotting
 % Reconstruction

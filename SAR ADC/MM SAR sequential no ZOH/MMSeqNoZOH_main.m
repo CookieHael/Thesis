@@ -11,6 +11,7 @@ signal_bias = 0;
 Vref = 2;
 k = 1.38064852e-23;
 T = 293;
+gmoverid = 20; %%I=150nA
 
 %% Inputs
 epoch = 1;
@@ -99,24 +100,38 @@ comparator_noise_on = noise_on;
 comparator_noise_rms = 1*k*T* 2/3 / minimum_cap;
 
 
-% LNA
+%% LNA
 LNA_noise_on = noise_on;
-LNA_bandwidth = 2.5*input_BW; %% in Hz
-% LNA_input_referred_noise = 3.5*10^-6;
-% LNA_gain = 100;
-% LNA_NEF = 2;
-LNA_input_referred_noise = sqrt(pi/2*LNA_bandwidth*(194*10^-9)^2);
-pd = makedist('Normal', 0, LNA_input_referred_noise);
-rng(42069);
-LNA_noise_vector = [pd.random(nb_MAC,1);0]';
-%LNA_gain = 10^(36/20)*12*1.5849;
 LNA_gain = 100;
+LNA_bandwidth = 3*input_BW; %% in Hz
 LNA_NEF = 1.08;
 
-total_gain = LNA_gain*sampling_gain*MM_incomplete_transfer_coeff;
-if(signal_peak_amplitude*total_gain>Vref/2)
-    warning("Careful! Input signal might be saturating ADC conversion range.\n");
+% Determine minimum current if bandwidth-constrained
+gm_min_1 = LNA_bandwidth*2*pi*nb_activations*minimum_cap;
+Id_min_1 = gm_min_1*gmoverid;
+LNA_input_referred_noise_1 = LNA_NEF/(sqrt(2*Id_min_1/(pi*V_thermal*4*k*T*LNA_bandwidth)));
+
+% Determine minimum current if slewrate-constrained
+SR_required = Vref*clk_freq; %Minimum current
+Id_min_2 = SR_required*nb_activations*minimum_cap;
+gm_min_2 = Id_min_2*gmoverid;
+LNA_input_referred_noise_2 = LNA_NEF/(sqrt(2*Id_min_2/(pi*V_thermal*4*k*T*LNA_bandwidth)));
+
+% Determine minimum current if noise-constrained
+LNA_input_referred_noise_3 = noise_quantization*10;
+Id_min_3 = (LNA_NEF/LNA_input_referred_noise_3)^2*pi*4*k*T*LNA_bandwidth*V_thermal;
+
+% Determine which of the three cases limits LNA performance
+I_LNA = max([Id_min_1, Id_min_2, Id_min_3]);
+if (I_LNA==Id_min_3 && Id_min_3>130e-09)
+    warning("gm/Id not really valid anymore, 20 at 130nA but lower at higher currents");
 end
+
+LNA_in_rms = min([LNA_input_referred_noise_1,LNA_input_referred_noise_2,LNA_input_referred_noise_3]); % Take maximum current of 3 required, noise will be minimum due to NEF formula
+LNA_SR = I_LNA/(nb_activations*minimum_cap);
+pd = makedist('Normal', 0, LNA_in_rms);
+rng(42069);
+LNA_noise_vector = [pd.random(nb_MAC,1);0]';
 
 % Opamp
 

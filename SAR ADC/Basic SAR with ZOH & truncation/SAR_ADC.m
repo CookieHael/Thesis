@@ -6,6 +6,8 @@ verbose = false;
 % number_of_bits = 1+i;
 number_of_bits = 6;
 sine_freq = 1000;
+input_BW=sine_freq;
+V_thermal = 25.27*10^-3;
 sine_amplitude = .001;
 sine_bias = 0;
 Vref = 2;
@@ -48,12 +50,37 @@ comparator_noise_on = non_idealities_on;
 comparator_noise_rms = 1*k*T* 2/3 / minimum_cap;
 
 
-% LNA
+
+%% LNA
 LNA_noise_on = non_idealities_on;
-LNA_bandwidth = 3*sine_freq; %%in Hz
-LNA_input_referred_noise = 3.5*10^-6;
 LNA_gain = 100;
-LNA_NEF = 2;
+LNA_bandwidth = 3*input_BW; %% in Hz
+LNA_NEF = 1.08;
+gmoverid = 20; %%I=150nA
+
+% Determine minimum current if bandwidth-constrained
+gm_min_1 = LNA_bandwidth*2*pi*minimum_cap;
+Id_min_1 = gm_min_1*gmoverid;
+LNA_input_referred_noise_1 = LNA_NEF/(sqrt(2*Id_min_1/(pi*V_thermal*4*k*T*LNA_bandwidth)));
+
+% Determine minimum current if slewrate-constrained
+SR_required = Vref*clk_freq; %Minimum current
+Id_min_2 = SR_required*minimum_cap;
+gm_min_2 = Id_min_2*gmoverid;
+LNA_input_referred_noise_2 = LNA_NEF/(sqrt(2*Id_min_2/(pi*V_thermal*4*k*T*LNA_bandwidth)));
+
+% Determine minimum current if noise-constrained
+LNA_input_referred_noise_3 = noise_quantization*10;
+Id_min_3 = (LNA_NEF/LNA_input_referred_noise_3)^2*pi*4*k*T*LNA_bandwidth*V_thermal;
+
+% Determine which of the three cases limits LNA performance
+I_LNA = max([Id_min_1, Id_min_2, Id_min_3]);
+if (I_LNA==Id_min_3 && Id_min_3>130e-09)
+    warning("gm/Id not really valid anymore, 20 at 130nA but lower at higher currents");
+end
+
+LNA_input_referred_noise = min([LNA_input_referred_noise_1,LNA_input_referred_noise_2,LNA_input_referred_noise_3]); % Take maximum current of 3 required, noise will be minimum due to NEF formula
+LNA_SR = I_LNA/(minimum_cap);
 
 if(sine_amplitude>Vref/(2*sampling_gain*LNA_gain))
     warning("Careful! Input signal might be saturating ADC conversion range.\n");

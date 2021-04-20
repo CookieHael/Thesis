@@ -6,11 +6,13 @@ verbose = false;
 % number_of_bits = 1+i;
 number_of_bits = 6;
 sine_freq = 20000;
+input_BW = sine_freq;
 sine_amplitude = .001;
 sine_bias = 0;
 Vref = 2;
 k = 1.38064852e-23;
 T = 293;
+V_thermal = 25.27*10^-3;
 
 ADC_input = load('/Users/mac/Documents/MATLAB/Thesis/ECG data/100m (0).mat').x;
 
@@ -24,7 +26,7 @@ nb_MAC = 10;
 sine_frequency_rad = 2 * pi * sine_freq;
 %nyquist_frequency = sine_frequency*number_of_bits*2;
 nb_cycles_per_sample = number_of_bits + 4 + nb_MAC;
-clk_freq = 2.1*(nb_cycles_per_sample)*sine_frequency_rad;
+clk_freq = 2.1*(nb_cycles_per_sample/(number_of_bits+4))*sine_frequency_rad;
 clk_period = 1/clk_freq;
 
 
@@ -66,12 +68,38 @@ comparator_noise_on = non_idealities_on;
 comparator_noise_rms = 1*k*T* 2/3 / minimum_cap;
 
 
-% LNA
+%% LNA
 LNA_noise_on = non_idealities_on;
-LNA_bandwidth = 40000; %% in Hz
-LNA_input_referred_noise = 3.5*10^-6;
 LNA_gain = 100;
-LNA_NEF = 2;
+LNA_bandwidth = 3*input_BW; %% in Hz
+LNA_NEF = 1.08;
+gmoverid = 20; %%I=150nA
+
+% Determine minimum current if bandwidth-constrained
+gm_min_1 = LNA_bandwidth*2*pi*minimum_cap;
+Id_min_1 = gm_min_1*gmoverid;
+LNA_input_referred_noise_1 = LNA_NEF/(sqrt(2*Id_min_1/(pi*V_thermal*4*k*T*LNA_bandwidth)));
+
+% Determine minimum current if slewrate-constrained
+SR_required = Vref*clk_freq; %Minimum current
+Id_min_2 = SR_required*minimum_cap;
+gm_min_2 = Id_min_2*gmoverid;
+LNA_input_referred_noise_2 = LNA_NEF/(sqrt(2*Id_min_2/(pi*V_thermal*4*k*T*LNA_bandwidth)));
+
+% Determine minimum current if noise-constrained
+LNA_input_referred_noise_3 = noise_quantization*10;
+Id_min_3 = (LNA_NEF/LNA_input_referred_noise_3)^2*pi*4*k*T*LNA_bandwidth*V_thermal;
+
+% Determine which of the three cases limits LNA performance
+I_LNA = max([Id_min_1, Id_min_2, Id_min_3]);
+if (I_LNA==Id_min_3 && Id_min_3>130e-09)
+    warning("gm/Id not really valid anymore, 20 at 130nA but lower at higher currents");
+end
+
+LNA_input_referred_noise = min([LNA_input_referred_noise_1,LNA_input_referred_noise_2,LNA_input_referred_noise_3]); % Take maximum current of 3 required, noise will be minimum due to NEF formula
+LNA_SR = I_LNA/(minimum_cap);
+
+
 
 if(sine_amplitude>Vref/(2*sampling_gain*LNA_gain))
     fprintf("Careful! Input signal might be saturating ADC conversion range.\n");
@@ -81,7 +109,7 @@ end
 %% Compression
 % ZOH compression
 
-ZOH_delta = Vref/(2^number_of_bits);
+ZOH_delta = 0*Vref/(2^number_of_bits);
 
 %%% ----------------  Testing  ----------------
 
@@ -106,7 +134,7 @@ V_eff = 0.1;
 V_fs = Vref;
 C_load_sar = minimum_cap;
 P_comp = 2*number_of_bits*log(2)*(clk_freq/(number_of_bits+3))*V_eff*V_fs*C_load_sar;
-P_comp = ((nb_samples-nb_ZOH)/nb_samples * P_comp) + (1-((nb_samples-nb_ZOH)/nb_samples))*3/(number_of_bits+2)*P_dac; %include leakage power
+P_comp = ((nb_samples-nb_ZOH)/nb_samples * P_comp) + (1-((nb_samples-nb_ZOH)/nb_samples))*3/(number_of_bits+2)*P_comp; %include leakage power
 
 alpha_logic = 0.4;
 C_logic = .77*1e-15;
