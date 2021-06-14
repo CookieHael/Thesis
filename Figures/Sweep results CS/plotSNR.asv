@@ -1,0 +1,157 @@
+clear;
+normal = [1,2];
+interictal = [3,4];
+ictal = 5;
+
+snr_ssim_index = 1;  %% Naming = metric_optimizedForMetric
+ssim_ssim_index = 2;
+snr_snr_index = 3;
+ssim_snr_index = 4;
+snr_smooth_index = 5;
+ssim_smooth_index = 6;
+
+avgSNRNormal = zeros(1,100);
+avgSNRInterictal = zeros(1,100);
+avgSNRIctal = zeros(1,100);
+
+avgSSIMNormal = zeros(3,100);
+avgSSIMInterictal = zeros(3,100);
+avgSSIMIctal = zeros(3,100);
+
+%% get SSIM optimized data
+
+for simPoint = 1:100
+    data = load("Metrics/"+num2str(simPoint)+".mat").full_output;
+    SNRdata = data{1, snr_ssim_index};
+    SSIMdata = data{1, ssim_ssim_index};
+    avgSNRNormal(1, simPoint) = mean(mean(SNRdata(1,normal)));
+    avgSNRInterictal(1, simPoint) = mean(mean(SNRdata(1,interictal)));
+    avgSNRIctal(1, simPoint) = mean(mean(SNRdata(1,ictal)));
+    
+    avgSSIMNormal(1, simPoint) = mean(mean(SSIMdata(1,normal)));
+    avgSSIMInterictal(1, simPoint) = mean(mean(SSIMdata(1,interictal)));
+    avgSSIMIctal(1, simPoint) = mean(mean(SSIMdata(1,ictal)));
+end
+
+figure
+hold on
+plot(avgSNRNormal)
+plot(avgSNRInterictal)
+plot(avgSNRIctal)
+l=legend(["Normal", "Interictal", "Ictal"]);
+title(l, "SSIM optimized");
+xlabel("Simulation settings index");
+ylabel("SNR (dB)");
+hold off
+plot_paper
+
+figure
+hold on
+plot(avgSSIMNormal)
+plot(avgSSIMInterictal)
+plot(avgSSIMIctal)
+l=legend(["Normal", "Interictal", "Ictal"]);
+title(l, "SSIM optimized");
+xlabel("Simulation settings index");
+ylabel("SSIM (dB)");
+hold off
+plot_paper
+
+%% get SNR optimized data
+
+avgSNRNormal = zeros(1,100);
+avgSNRInterictal = zeros(1,100);
+avgSNRIctal = zeros(1,100);
+
+avgSSIMNormal = zeros(1,100);
+avgSSIMInterictal = zeros(1,100);
+avgSSIMIctal = zeros(1,100);
+
+
+
+for simPoint = 1:100
+    data = load("Metrics/"+num2str(simPoint)+".mat").full_output;
+    SNRdata = data{1, snr_snr_index};
+    SSIMdata = data{1, ssim_snr_index};
+    avgSNRNormal(1, simPoint) = mean(mean(SNRdata(1,normal)));
+    avgSNRInterictal(1, simPoint) = mean(mean(SNRdata(1,interictal)));
+    avgSNRIctal(1, simPoint) = mean(mean(SNRdata(1,ictal)));
+    
+    avgSSIMNormal(1, simPoint) = mean(mean(SSIMdata(1,normal)));
+    avgSSIMInterictal(1, simPoint) = mean(mean(SSIMdata(1,interictal)));
+    avgSSIMIctal(1, simPoint) = mean(mean(SSIMdata(1,ictal)));
+end
+
+figure
+hold on
+plot(avgSNRNormal)
+plot(avgSNRInterictal)
+plot(avgSNRIctal)
+l=legend(["Normal", "Interictal", "Ictal"]);
+title(l, "SNR optimized");
+xlabel("Simulation settings index");
+ylabel("SNR (dB)");
+hold off
+plot_paper
+
+figure
+hold on
+plot(avgSSIMNormal)
+plot(avgSSIMInterictal)
+plot(avgSSIMIctal)
+l=legend(["Normal", "Interictal", "Ictal"]);
+title(l, "SNR optimized");
+xlabel("Simulation settings index");
+ylabel("SSIM (dB)");
+hold off
+plot_paper
+
+
+%% get smoothness optimized data
+
+avgSNRNormal = zeros(1,100);
+avgSNRInterictal = zeros(1,100);
+avgSNRIctal = zeros(1,100);
+
+avgSSIMNormal = zeros(1,100);
+avgSSIMInterictal = zeros(1,100);
+avgSSIMIctal = zeros(1,100);
+
+
+
+for simPoint = 1:100
+    data = load("Metrics/"+num2str(simPoint)+".mat").full_output;
+    SNRdata = data{1, snr_smooth_index};
+    SSIMdata = data{1, ssim_smooth_index};
+    avgSNRNormal(1, simPoint) = mean(mean(SNRdata(1,normal)));
+    avgSNRInterictal(1, simPoint) = mean(mean(SNRdata(1,interictal)));
+    avgSNRIctal(1, simPoint) = mean(mean(SNRdata(1,ictal)));
+    
+    avgSSIMNormal(1, simPoint) = mean(mean(SSIMdata(1,normal)));
+    avgSSIMInterictal(1, simPoint) = mean(mean(SSIMdata(1,interictal)));
+    avgSSIMIctal(1, simPoint) = mean(mean(SSIMdata(1,ictal)));
+end
+
+figure
+hold on
+plot(avgSNRNormal)
+plot(avgSNRInterictal)
+plot(avgSNRIctal)
+l=legend(["Normal", "Interictal", "Ictal"]);
+title(l, "Smoothness optimized");
+xlabel("Simulation settings index");
+ylabel("SNR (dB)");
+hold off
+plot_paper
+
+figure
+hold on
+plot(avgSSIMNormal)
+plot(avgSSIMInterictal)
+plot(avgSSIMIctal)
+l=legend(["Normal", "Interictal", "Ictal"]);
+title(l, "Smoothness optimized");
+xlabel("Simulation settings index");
+ylabel("SSIM (dB)");
+hold off
+plot_paper

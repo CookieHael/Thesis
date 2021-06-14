@@ -1,0 +1,22 @@
+function [SRBM] = generateCorrectedSRBME(M, N, S, K)
+%GENERATESRBM Generate MxN (1,s)-sparse random binary matrix
+
+SRBM = zeros(M,N);
+for i=1:N
+    ones = randperm(M, S);
+    SRBM(ones,i) = 1;
+end
+r = rank(SRBM);
+
+nb_ones = round(S/M*N);
+    
+while(r ~= M && M>=N && S~=M)
+    SRBM = zeros(M,N);
+    for i=1:M
+        ones = randperm(M, S);
+        SRBM(ones,i) = 1;
+    end
+    r = rank(SRBM);
+end
+
+

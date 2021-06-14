@@ -1,0 +1,13 @@
+function [range, minima] = getRange(input)
+
+f=dir("Neural data/"+str+"_data/*"+".txt");
+range=[];
+minima = [];
+    for i = 1:100
+        name = strcat(f(i).folder,'/',f(i).name);
+        new = readvars(name);
+        range = [range; max(new)-min(new)];
+        minima = minima
+    end
+end
+

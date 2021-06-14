@@ -1,0 +1,9 @@
+function output = epoch_data(data,nb_MAC, nb_channels)
+
+x = -length(data) + (floor(length(data)/nb_MAC+1))*nb_MAC;
+data = [data; zeros(x,1)];
+output = reshape(data, length(data)/nb_MAC, nb_MAC).';
+output = repelem(output, nb_channels, 1);
+output = reshape(output
+end
+

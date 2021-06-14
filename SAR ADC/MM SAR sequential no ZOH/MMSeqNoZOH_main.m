@@ -1,41 +1,77 @@
 clear;
 verbose = false;
-tic
-% for i=1:20
-%%  ----------  Constants & circuit settings  --------------
-% number_of_bits = 1+i;
-number_of_bits = 6;
-input_BW = 128; %This should be the Nyquist frequency, and input should be oversampled wrt this
-signal_peak_amplitude = .001;
-signal_bias = 0;
-Vref = 2;
+% tic
+
+%%  Constants 
 k = 1.38064852e-23;
 T = 293;
+V_thermal = 25.27*10^-3;
+minimum_technology_cap = 1.995 * 1e-15;
+area_per_C = 0.001025;  %F/m^2
+C_mismatch_parameter = 3.4878e-09;
+C_logic = .77*1e-15;
+
+%% Process parameters
+Vref = 2;
 gmoverid = 20; %%I=150nA
+V_eff = 1/gmoverid;
+fmax_ADC = 10e6;   %% Determine from simulation!
+
 
 %% Inputs
 epoch = 1;
-ADC_input = database_load('EEGdata_ch1.mat', epoch);
-%ADC_input_OS =  database_load('EEGdata_10xOversampled.mat', epoch);
+out = zeros(80,1);
+out2 = zeros(80,1);
+for p=1:1
+    p
+ADC_input = database_load('EEGdata_ch1.mat',1)'/10;
+
+% ADC_input_OS =  database_load('upsampled_EEG', epoch)'/10;
+%data = load('100m (0).mat').x/10;
+
 
 %% System settings
-
+number_of_bits = 6;
+input_BW = 256; %This should be the Nyquist frequency, and input should be oversampled wrt this
+signal_peak_amplitude = .00002;
+signal_bias = 0;
 nb_MAC = 384;
-cap_ratio = 35;
+cap_ratio = 15;
 nb_channels = 150;
+tertiary_matrix = false;
 nb_activations = 2;
+cap_gain_error = 1e-2;
 
 non_idealities_on = 1;
 noise_on = 1;
+leakage_on = 1;
+
+if ~noise_on
+    warning("Noise currently off!")
+end
+
+if ~leakage_on
+    warning("Leakage currently  off!")
+end
+
+noise_quantization = sqrt((Vref)^2/12*2^(-2*number_of_bits));
+
 
 %% Sensing matrix setup
 
-if(nb_channels == 150)
+if(nb_channels == 150 && nb_MAC == 384 && nb_activations == 2)
     sensing_matrix_large = load("sensing150.mat").sensing_matrix_large;  %%Capacitor ratio was 35
     sensing_matrix_corrected = load("sensing150.mat").sensing_matrix_corrected;
-elseif (nb_channels == 192)
+    
+elseif (nb_channels == 192 && nb_MAC == 384 && nb_activations == 2)
     sensing_matrix_large = load("sensing192.mat").Phi;
     sensing_matrix_corrected = load("sensing192.mat").corrected_Phi;
+elseif (nb_channels == 50 && nb_MAC == 384 && nb_activations == 1)
+    sensing_matrix_large = load("Phi50ch384MAC.mat").phi;
+    sensing_matrix_corrected =  rescaleSRBM(sensing_matrix_large, cap_ratio);
+elseif (nb_channels == 75 && nb_MAC == 384 && nb_activations == 1)
+    sensing_matrix_large = load("phi384MAC75ch.mat").bestPhi;
+    sensing_matrix_corrected =  rescaleSRBM(sensing_matrix_large, cap_ratio);
 else
     [sensing_matrix_large, sensing_matrix_corrected] = generateCorrectedSRBM(nb_channels, nb_MAC, nb_activations, cap_ratio);
 end
@@ -46,33 +82,28 @@ end
 if( nb_MAC ~= size(sensing_matrix_large, 2) || nb_channels ~= size(sensing_matrix_large,1))
     error("Wrong matrix dimensions");
 end
+if (tertiary_matrix)
+    [sensing_matrix_corrected, sensing_matrix_large] = makeTertiary(sensing_matrix_corrected, sensing_matrix_large);
+end
 
 %% Clock & sine timing settings
 
 clk_freq = 2.1*input_BW;
 clk_period = 1/clk_freq;
 
-%% Circuit behaviour
-
-if ~noise_on
-    warning("Noise currently off!")
-end
-
-noise_quantization = Vref^2/12*2^(-2*number_of_bits);
-
-% Sample time jitter
+%% Sample time jitter
 sampling_jitter_on = noise_on;
 sample_time_jitter = 16e-12;
 
+%% Capacitor sizing
+minimum_sampling_cap = 2 * 12*k*T*2^(2*number_of_bits)/Vref^2;  % Double to increase noise performance
+[minimum_match_cap_DAC, minimum_match_cap_MAC] = getCapSizes(number_of_bits,C_mismatch_parameter, minimum_technology_cap, cap_ratio, cap_gain_error, area_per_C);
+MAC_cap = max([minimum_sampling_cap, minimum_technology_cap, minimum_match_cap_MAC]);
+DAC_cap = max([minimum_sampling_cap, minimum_technology_cap, minimum_match_cap_DAC]);
 
-% Capacitors
-minimum_technology_cap = 1.995 * 1e-15;
-minimum_sampling_cap = 12*k*T*2/3*2^(2*number_of_bits)/Vref^2;
-minimum_cap = max(minimum_technology_cap,minimum_sampling_cap);
-
-% MAC non-idealities & noise
-C_sense_size = 1;
-C1 = C_sense_size*minimum_cap;
+%% MAC non-idealities & noise
+C_sense_size_multiplier = 5;
+C1 = C_sense_size_multiplier*MAC_cap;
 C2 = C1*cap_ratio; 
 MM_incomplete_transfer_coeff = C1/(C1+C2);
 if (non_idealities_on)
@@ -80,79 +111,103 @@ if (non_idealities_on)
 else
     MM_attenuation_coeff = 1;  %Actually more like 1-leakage
 end
-
 MM_sampling_noise = noise_on*((k*T * C1/(C1+C2)^2) + (k*T*(C1*C2/(C1+C2))/C2^2));  % Formula with square root is sigma, model uses variance
 
+%% Leakage
+leak_current = leakage_on * 2 *10^(-15);
 
-% Sample & hold switching noise
+%% Sample & hold (with gain)
 switch_noise_on = noise_on;
-Cs = minimum_cap*1/MM_incomplete_transfer_coeff*1.5;
-Cf = minimum_cap;
-sampling_gain = Cs/Cf;
-switching_noise = k*T/Cf;
+Cs_unit_cap = 40/(MM_incomplete_transfer_coeff);
+Cf_unit_cap = 20;
+sampling_gain = Cs_unit_cap/Cf_unit_cap;
+switching_noise = k*T/(Cf_unit_cap*minimum_sampling_cap);
 
 
-%%% Comparator offset/hysteresis & noise
+%% Comparator offset/hysteresis & noise
 comparator_offset_on = noise_on;
-comparator_high_offset = 0.2*10e-4;
-comparator_low_offset = -.1*10e-4;
+comparator_high_offset = 8e-3;
+comparator_low_offset = comparator_high_offset;
 comparator_noise_on = noise_on;
-comparator_noise_rms = 1*k*T* 2/3 / minimum_cap;
+comparator_noise_rms = 1*k*T* 2/3 / C_logic;
 
 
 %% LNA
-LNA_noise_on = noise_on;
-LNA_gain = 100;
+LNA_noise_on = 1;
+LNA_gain = 1000;
 LNA_bandwidth = 3*input_BW; %% in Hz
 LNA_NEF = 1.08;
 
 % Determine minimum current if bandwidth-constrained
-gm_min_1 = LNA_bandwidth*2*pi*nb_activations*minimum_cap;
+gm_min_1 = LNA_bandwidth*2*pi*nb_activations*MAC_cap;
 Id_min_1 = gm_min_1*gmoverid;
 LNA_input_referred_noise_1 = LNA_NEF/(sqrt(2*Id_min_1/(pi*V_thermal*4*k*T*LNA_bandwidth)));
 
 % Determine minimum current if slewrate-constrained
 SR_required = Vref*clk_freq; %Minimum current
-Id_min_2 = SR_required*nb_activations*minimum_cap;
-gm_min_2 = Id_min_2*gmoverid;
+Id_min_2 = SR_required*nb_activations*MAC_cap;
 LNA_input_referred_noise_2 = LNA_NEF/(sqrt(2*Id_min_2/(pi*V_thermal*4*k*T*LNA_bandwidth)));
 
 % Determine minimum current if noise-constrained
-LNA_input_referred_noise_3 = noise_quantization*10;
+LNA_input_referred_noise_3 = 0.5*noise_quantization/(LNA_gain*sampling_gain*MM_incomplete_transfer_coeff);
 Id_min_3 = (LNA_NEF/LNA_input_referred_noise_3)^2*pi*4*k*T*LNA_bandwidth*V_thermal;
 
 % Determine which of the three cases limits LNA performance
 I_LNA = max([Id_min_1, Id_min_2, Id_min_3]);
-if (I_LNA==Id_min_3 && Id_min_3>130e-09)
+if (I_LNA==Id_min_1 && Id_min_3>130e-09)
     warning("gm/Id not really valid anymore, 20 at 130nA but lower at higher currents");
 end
 
 LNA_in_rms = min([LNA_input_referred_noise_1,LNA_input_referred_noise_2,LNA_input_referred_noise_3]); % Take maximum current of 3 required, noise will be minimum due to NEF formula
-LNA_SR = I_LNA/(nb_activations*minimum_cap);
+LNA_SR = I_LNA/(nb_activations*MAC_cap);
 pd = makedist('Normal', 0, LNA_in_rms);
-rng(42069);
+rng(420699);
 LNA_noise_vector = [pd.random(nb_MAC,1);0]';
 
-% Opamp
+
+%% Total gain check
+total_gain = LNA_gain*sampling_gain*MM_incomplete_transfer_coeff;
+if(signal_peak_amplitude*total_gain>Vref/2)
+    warning("Careful! Input signal might be saturating ADC conversion range.\n");
+end
+
+
+%% ZOH settings
+
+ZOH_delta = 0*Vref/(2^number_of_bits);
+if (ZOH_delta>0)
+    fprintf("Reminder: ZOH is on, signal quality may be degraded.\n");
+end
+
+
+%% Determine minimum required number of ADCs
+
+OCR = nb_activations*(number_of_bits+1);
+nb_ADC = ceil(OCR*clk_freq/fmax_ADC);
 
 
 %% Simulate
 
-sensing_order = determineSensingOrder(sensing_matrix_large, nb_activations);
+[sensingOrderMatrixFull, sensing_order] = determineSensingOrder(sensing_matrix_large, nb_activations, nb_ADC);
+sensingOrderMatrix = sensingOrderMatrixFull(sensing_order,:);
+sensingOrderMatrix = sensingOrderMatrix'; %Transpose because next operation puts columns under eachother, we want rows appended instead
+sensingOrderMatrix = sensingOrderMatrix(:);
 sensing_matrix_sensing_order = sensing_matrix_large(sensing_order,:);
 sensing_matrix_prep = sensing_matrix_sensing_order';
 sensing_matrix = sensing_matrix_prep(:)';
-ADC_input_reshaped = repmat(ADC_input, 1, nb_channels);
 
-sim_number = 1;
 
-tic
-sim_out = sim('MMSAR_SequentialNoZOH', (nb_channels+1)*clk_period*nb_MAC);
-toc
+sim_number = 10; %Change in future during multiple iterations of one setting for noise estimations, such that noise seeds are different
+sim_noise_seed = sim_number;
+
+
+sim_out = sim('MMSAR_SequentialNoZOH', (nb_channels+1)*clk_period*(nb_MAC+1)+clk_period*(number_of_bits+5));
+
 cs_out = zeros(nb_channels,1);
 for i = 1:nb_channels
-    cs_out(sensing_order(i)) = sim_out.yout.signals(1).values(2+i);
+    cs_out(sensing_order(i)) = sim_out.yout.signals(1).values(i+3);
 end
+
 
 
 %% Compressive sensing reconstruction      
@@ -162,48 +217,66 @@ else
     A = sensing_matrix_large*wmpdictionary(nb_MAC, 'lstcpt', {'dct'});
 end
 
-recovery = BSBL_BO(A, cs_out, 1:15:nb_MAC, 0, 'prune_gamma',-1, 'max_iters',10);
+recovery = BSBL_BO(A, cs_out, 1:13:nb_MAC, 2, 'prune_gamma',-1, 'max_iters',15);
 recovered_signal = (idct(recovery.x))';
 recovered_signal = recovered_signal(1:nb_MAC);
 
-% ADC_input_scaled = 1000*ADC_input(1:383);
-% recovered_signal_scaled = 2*(recovered_signal)/(max(recovered_signal)-min(recovered_signal));
-% r = lowpass(recovered_signal, 0.9);
-% recovered_signal_scaled_lowpass = r*2/(max(r)-min(r));
-% [rms_out_scaled, mse_out_scaled] = calculateRMS(ADC_input_scaled, recovered_signal_scaled);
-% [rms_out_scaled_lowpass, mse_out_scaled_lowpass] = calculateRMS(ADC_input_scaled, recovered_signal_scaled_lowpass);
-% windowLen = 100;
-% [mssim, ssim_map] = ssim_1d(recovered_signal, ADC_input_scaled, windowLen);
-% ssim_scaled = mssim;
-
 %   RMS calculations
 expected_coeff = sensing_matrix_corrected*(total_gain*ADC_input');
-expected_recovery = BSBL_BO(A, expected_coeff, 1:15:nb_MAC, 0, 'prune_gamma',-1, 'max_iters',10);
+expected_recovery = BSBL_BO(A, expected_coeff, 1:13:nb_MAC, 0, 'prune_gamma',-1, 'max_iters',15);
 expected_recovered_signal = (idct(expected_recovery.x))';
 
 [rms_out, mse_out] = calculateRMS(ADC_input*total_gain, recovered_signal);
-[rms_out_expected, mse_out_expected] = calculateRMS(expected_recovered_signal, recovered_signal);
+mse_out
+[rms_out_expected, mse_out_expected] = calculateRMS(expected_recovered_signal, ADC_input*total_gain);
 
 % SSIM calculations
 windowLen = 100;
 [mssim, ssim_map] = ssim_1d(recovered_signal, ADC_input*total_gain, windowLen);
 ssim_1 = mssim;
 
-[mssim_expected, ssim_map_expected] = ssim_1d(recovered_signal, expected_recovered_signal, windowLen);
+[mssim_expected, ssim_map_expected] = ssim_1d(ADC_input*total_gain, expected_recovered_signal, windowLen);
 ssim_expected = mssim_expected;
 
 
+%% Correct leakage
+cs_out_LC = negateLeakage(sensing_matrix_large, sensingOrderMatrixFull, sampling_gain, leak_current, C2, clk_period, cs_out);
+recovery = BSBL_BO(A, cs_out_LC, 1:13:nb_MAC, 0, 'prune_gamma',-1, 'max_iters',15);
+
+recovered_signal_LC = (idct(recovery.x))';
+recovered_signal_LC = recovered_signal_LC(1:nb_MAC);
+[rms_out_LC, mse_out_LC] = calculateRMS(ADC_input*total_gain, recovered_signal_LC);
+mse_out_LC
+[mssim, ssim_map] = ssim_1d(recovered_signal_LC, ADC_input*total_gain, windowLen);
+ssim_1_LC = mssim;
+
+%% Second reconstruction method (set for sparse signals, this sometimes performs better for high leakage&compression, test out) 
+recovery = BSBL_BO(A, cs_out_LC, 1:13:nb_MAC, 2);
+recovered_signal_2 = (idct(recovery.x))';
+recovered_signal_2 = recovered_signal_2(1:nb_MAC);
+[rms_out_2, mse_out_2] = calculateRMS(ADC_input*total_gain, recovered_signal_2);
+mse_out_2;
+[mssim, ssim_map] = ssim_1d(recovered_signal_2, ADC_input*total_gain, windowLen);
+ssim_2 = mssim;
+
+
+out(p) = mse_out_LC;
+out2(p) = ssim_1_LC;
+end
+
 %% Power calculations
-C_0_DAC = minimum_cap;
+C_0_DAC = DAC_cap;
 E_dac = (2^(number_of_bits) * C_0_DAC)/(number_of_bits+3) * ( ((5/6) - (1/2)^number_of_bits -(1/3)*(1/2)^(2*number_of_bits))*Vref^2 - 1/2*(signal_bias)^2 - (1/2)^number_of_bits*Vref*(signal_bias));
 P_dac = E_dac * nb_channels*clk_freq/(nb_MAC) * (nb_channels);
 
 alpha_logic = 0.4;
 C_logic = .77*1e-15;
 P_logic_SAR = alpha_logic * (2*number_of_bits*8*C_logic) * Vref^2 * nb_channels/(nb_MAC)*clk_freq*number_of_bits/(number_of_bits+1); %include leakage power
-P_logic = P_logic_SAR;
+P_logic_phi = (log2(nb_MAC) + 1) * nb_MAC * 8*C_logic * Vref^2 * clk_freq;  %alpha logic assumed 1 for shift register
+P_logic = P_logic_SAR+P_logic_phi;
 
-V_eff = 0.1;
+P_switch = 4*C_logic* (nb_MAC+nb_activations)* Vref^2*clk_freq;
+
 V_fs = Vref;
 C_load_sar = 4*C_logic;  %Assume latch used for input to SAR
 E_comp = 2*number_of_bits*log(2)*V_eff*V_fs*C_load_sar;
@@ -211,10 +284,10 @@ P_comp = nb_channels/(nb_MAC) * clk_freq * number_of_bits/(number_of_bits+1) * E
 
 P_tot_SAR = (P_dac+P_comp+P_logic);
 
-V_thermal = 25.27*10^-3;
-I_LNA = (LNA_NEF/LNA_input_referred_noise)^2*pi*4*k*T*LNA_bandwidth*V_thermal;
 P_LNA = Vref*I_LNA;
 
+I_SH = 2*sampling_gain*minimum_sampling_cap*Vref*clk_freq*nb_channels/(nb_MAC);
+P_SH = Vref * I_SH;
 
 % Transmission power
 
@@ -222,105 +295,161 @@ transmission_power_per_bit = 10^-9;
 P_transmission_full_signal = clk_freq/nb_MAC * nb_channels * number_of_bits * transmission_power_per_bit;
 
 
-P_tot = P_tot_SAR + P_LNA + P_transmission_full_signal;
-P_LNA_percentage = round(100*P_LNA/P_tot,2);
-P_comp_percentage = round(100*P_comp/P_tot,2);
-P_dac_percentage = round(100*P_dac/P_tot,2);
-P_SAR_percentage = round(100*P_tot_SAR/P_tot,2);
-P_transmission_full_percentage = round(100*P_transmission_full_signal/P_tot,2);
-
+P_tot = P_tot_SAR + P_LNA + P_SH + P_transmission_full_signal+P_switch;
+P_LNA_percentage = 100*P_LNA/P_tot;
+P_SH_percentage = 100*P_SH/P_tot;
+P_comp_percentage = 100*P_comp/P_tot;
+P_dac_percentage = 100*P_dac/P_tot;
+P_SAR_percentage = 100*P_tot_SAR/P_tot;
+P_switch_percentage = 100*P_switch/P_tot;
+P_logic_percentage = 100*P_logic/P_tot;
+P_transmission_full_percentage = 100*P_transmission_full_signal/P_tot;
 
 %% Calculate total capacitance/area required - trade-off multi-ADC VS OC-ADC
 %Total C & overclocking ratio
-total_C_unit = zeros(5,1);
-OCR = zeros(5,1);
 
-for nb_ADC = 1:5
+min_nb_ADC = ceil(nb_activations*(number_of_bits+3)/fmax_ADC);
+C_MAC = C_sense_size_multiplier*nb_activations + C_sense_size_multiplier*cap_ratio*nb_channels;
+C_SAR = 2^number_of_bits * (min_nb_ADC);
+total_C = C_MAC*MAC_cap + C_SAR*DAC_cap + (Cs_unit_cap + Cf_unit_cap)*MAC_cap*min_nb_ADC;
+OCR = nb_activations*(number_of_bits+3)/(min_nb_ADC);
+        
+total_C_unit = round(total_C/minimum_technology_cap);
+area_C = total_C*area_per_C;
 
-    C_MAC = C_sense_size*nb_activations + C_sense_size*cap_ratio*nb_channels;
+C_MAC_percentage = 100*(C_MAC*MAC_cap/(minimum_technology_cap*total_C_unit));
+C_SH_percentage =  100*((Cs_unit_cap + Cf_unit_cap)*MAC_cap*min_nb_ADC/(minimum_technology_cap*total_C_unit));
 
-    C_SH = nb_ADC * (1 + sampling_gain);
-
-    C_SAR = 2^number_of_bits * nb_ADC;
-
-    total_C_unit(nb_ADC) = C_MAC + C_SH + C_SAR;
-    %area_C = total_C*area_per_C;
-    OCR(nb_ADC) = nb_activations*(number_of_bits+3)/nb_ADC;
-end
-
-total_C = total_C_unit*minimum_cap;
+C_SAR_percentage = 100*( C_SAR*DAC_cap /(minimum_technology_cap*total_C_unit));
 
 
 %% Figure plotting
-% Reconstruction
-f = figure;
-f.Position = [300 300 1000 800];
-subplot(221)
-hold on
-plot(recovered_signal)
-plot(total_gain*ADC_input)
-hold off
-legend("Recovered values", "Input values");
-title("Recovered vs input: MSE = " + mse_out + ". SSIM = "+ssim_1)
-subplot(222)
-hold on
-plot(expected_recovered_signal)
-plot(recovered_signal)
-hold off
-legend("Digital recovery", "Analog recovery");
-title("Digital recovery vs analog recovery, MSE = " + mse_out_expected + ". SSIM = "+ssim_expected)
 
-% Plot expected coeff (previous model) vs actual coeff
-subplot(223)
+if (ssim_1_LC>ssim_2)
+    SecondPlot = recovered_signal_LC;
+    mse_SecondPlot = mse_out_LC;
+    ssim_SecondPlot = ssim_1_LC;
+else
+    SecondPlot = recovered_signal_2;
+    mse_SecondPlot = mse_out_2;
+    ssim_SecondPlot = ssim_2;
+end
+% Reconstruction
+% f = figure;
+% f.Position = [300 300 1000 800];
+% subplot(221)
+% hold on
+% plot(recovered_signal)
+% plot(total_gain*ADC_input)
+% plot(SecondPlot)
+% hold off
+% legend("Recovered values", "Input values", "Leakage corrected recovery");
+% title("Recovered vs input: MSE = " + mse_out + ". SSIM = "+ssim_1)
+% subplot(222)
+% hold on
+% plot(expected_recovered_signal)
+% plot(recovered_signal)
+% plot(recovered_signal_LC)
+% hold off
+% legend("Digital recovery", "Analog recovery");
+% title("Digital recovery vs analog recovery, MSE = " + mse_out_expected + ". SSIM = "+ssim_expected)
+% 
+% % Plot expected coeff (previous model) vs actual coeff
+% subplot(223)
+% hold on
+% plot(expected_coeff)
+% plot(cs_out)
+% plot(cs_out_LC)
+% hold off
+% title("Digital coefficients vs analog coefficients");
+% legend("Digital coefficients", "Analog coefficients");
+% subplot(224)
+% plot(expected_coeff-cs_out)
+% title("Difference between ideal and calculated coefficients")
+% 
+% % Power & area
+% figure
+% hold on
+% subplot(311)
+% bar([P_LNA_percentage; P_SAR_percentage; P_transmission_full_percentage; P_SH_percentage; P_logic_percentage; P_switch_percentage; P_dac_percentage]);
+% title("Power per block in percentage of total. Total power = " + P_tot);
+% set(gca, 'XTick', 1:7, 'XTickLabels', {"LNA", "SAR", "Transmission", "S&H", "Logic", "Switches", "DAC"});
+% subplot(312)
+% plot(total_C_unit)
+% title("Area per configuration. Chosen config of " +nb_ADC+" ADCs has an approx area of " + area_C(nb_ADC)*10^(12) + "um^2.");
+% ylabel("Total amount of unit caps");
+% xlabel("Number of ADCs");
+% set(gca, 'XTick', min_nb_ADC:min_nb_ADC+3);
+% xline(nb_ADC)
+% subplot(313)
+% plot(OCR)
+% set(gca, 'XTick', min_nb_ADC:min_nb_ADC+3);
+% xlabel("Number of ADCs");
+% ylabel("Overclocking ratio");
+% xline(nb_ADC)
+% title("Overclocking ratio for given number of ADCs")
+
+
+%% Plot for thesis
+hold on
+plot(total_gain*ADC_input)
+plot(recovered_signal_LC)
+legend("Input signal", "Recovered signal")
+title("NMSE = "+num2str(mse_out_LC) + ", SSIM = "+num2str(ssim_1_LC))
+xlabel("Sample index")
+ylabel("Signal (V)")
+hold off
+plot_paper
+
+figure
 hold on
 plot(expected_coeff)
 plot(cs_out)
+plot(cs_out_LC)
+legend("Ideal coefficients", "Output coefficients", "Leakage corrected coefficients")
+xlabel("Coefficient index")
+ylabel("Signal (V)")
 hold off
-title("Digital coefficients vs analog coefficients");
-legend("Digital coefficients", "Analog coefficients");
-subplot(224)
-plot(expected_coeff-cs_out)
-title("Difference between ideal and calculated coefficients")
+plot_paper
 
-% Power & area
 figure
 hold on
-subplot(311)
-bar([P_LNA_percentage; P_SAR_percentage; P_transmission_full_percentage]);
-title("Power per block in percentage of total. Total power = " + P_tot);
-set(gca, 'XTick', 1:3, 'XTickLabels', {"LNA", "SAR", "Transmission"});
-subplot(312)
-plot(total_C_unit)
-title("Area per configuration");
-ylabel("Total amount of unit caps");
-xlabel("Number of ADCs");
-set(gca, 'XTick', 1:5);
-subplot(313)
-plot(OCR)
-set(gca, 'XTick', 1:5);
-xlabel("Number of ADCs");
-ylabel("Overclocking ratio");
-title("Overclocking ratio for given number of ADCs")
+plot(expected_coeff-cs_out_LC)
+xlabel("Coefficient index")
+ylabel("Coefficient error (V)")
+hold off
+plot_paper
 
-%% Helper functions
-function sndr_out = sinad_ADC(input_vector, nb_cycles_per_sample, clk_freq)
-    y = zeros( round( size(input_vector,1) / (2*nb_cycles_per_sample) ), 1);
-    i=1;
-    for j = 1:size(y,1)
-        y(j) = input_vector(i);
-        i = i + 2*nb_cycles_per_sample;
-    end
-   % sinad(y, clk_freq/(nb_cycles_per_sample));
-    sndr_out = sinad(y, clk_freq/(nb_cycles_per_sample));
-end
+figure
+hold on
+plot(expected_recovered_signal)
+plot(recovered_signal_LC)
+legend("Ideal recovery", "Leakage corrected recovery")
+title("Degradation w.r.t NMSE = " + num2str(mse_out_LC-mse_out_expected) + " , SSIM = " + num2str(ssim_expected - ssim_1_LC))
+hold off
+xlabel("Sample index")
+ylabel("Signal (V)")
+plot_paper
 
-function out = reshape_output(input, nb_cycles_per_sample)
-    nb_skipped = 10*nb_cycles_per_sample; %% Skip the first few samples. These may be way off due to startup behaviour of LNA.
-    out = zeros(round((size(input,1))/(2*nb_cycles_per_sample))-nb_skipped,1);
-    i=nb_skipped;
-    for j = 1:size(out,1)
-        out(j) = input(i);
-        i = i + 2*nb_cycles_per_sample;
-    end
-end
+figure
+hold on
+bar([P_SH_percentage; P_dac_percentage;P_logic_percentage; P_comp_percentage;P_switch_percentage ]);
+set(gca, 'XTick', 1:5, 'XTickLabels', { "S&H", "DAC", "Logic", "Comparator", "Switching network"});
+ylabel("Relative power draw percentages without Tx & LNA")
+title("Total power: " + P_tot*1e6 + "\muW")
+plot_paper
+axes('Position',[.7 .7 .2 .2])
+box on
+bar([P_LNA_percentage; 100-(P_LNA_percentage+P_transmission_full_percentage); P_transmission_full_percentage; ]);
+set(gca, 'XTick', 1:3, 'XTickLabels', {"LNA", "Other", "Transmission"});
+title("With TX and LNA")
+plot_paper
 
+figure
+hold on
+bar([C_SH_percentage; C_MAC_percentage;C_SAR_percentage]);
+set(gca, 'XTick', 1:3, 'XTickLabels', { "S&H", "MAC array", "SAR"});
+ylabel("Relative capacitor areas")
+title("Total unit capacitance: " + total_C_unit)
+plot_paper
+plot_paper
